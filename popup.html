@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>HTML转PDF电子书</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>📚 PDF电子书生成器</h1>
+      <p class="subtitle">将网页转换为精美的电子书</p>
+    </header>
+    
+    <main>
+      <div class="status-section">
+        <div id="pageInfo" class="page-info">
+          <span id="currentUrl" class="url-display">检测当前页面...</span>
+        </div>
+      </div>
+      
+      <div class="options-section">
+        <h3>📋 生成选项</h3>
+        
+        <div class="option-group">
+          <label class="checkbox-container">
+            <input type="checkbox" id="includeImages" checked>
+            <span class="checkmark"></span>
+            包含图片
+          </label>
+          
+          <label class="checkbox-container">
+            <input type="checkbox" id="includeToc" checked>
+            <span class="checkmark"></span>
+            生成目录
+          </label>
+          
+          <label class="checkbox-container">
+            <input type="checkbox" id="includeLinks" checked>
+            <span class="checkmark"></span>
+            保留内部链接
+          </label>
+        </div>
+        
+        <div class="input-group">
+          <label for="bookTitle">📖 电子书标题:</label>
+          <input type="text" id="bookTitle" placeholder="自动检测页面标题">
+        </div>
+        
+        <div class="input-group">
+          <label for="authorName">✍️ 作者:</label>
+          <input type="text" id="authorName" placeholder="输入作者名称">
+        </div>
+        
+        <div class="select-group">
+          <label for="pageSize">📄 页面大小:</label>
+          <select id="pageSize">
+            <option value="a4">A4</option>
+            <option value="letter">Letter</option>
+            <option value="legal">Legal</option>
+          </select>
+        </div>
+      </div>
+      
+      <div class="progress-section" id="progressSection" style="display: none;">
+        <div class="progress-bar">
+          <div class="progress-fill" id="progressFill"></div>
+        </div>
+        <p id="progressText" class="progress-text">准备生成PDF...</p>
+      </div>
+      
+      <div class="actions-section">
+        <button id="generateBtn" class="generate-btn">
+          <span class="btn-icon">🚀</span>
+          <span class="btn-text">生成PDF电子书</span>
+        </button>
+        
+        <button id="previewBtn" class="preview-btn">
+          <span class="btn-icon">👀</span>
+          <span class="btn-text">预览内容</span>
+        </button>
+      </div>
+    </main>
+    
+    <footer>
+      <div class="tips">
+        <p>💡 <strong>使用提示:</strong></p>
+        <ul>
+          <li>支持大部分网站内容转换</li>
+          <li>自动识别标题结构生成目录</li>
+          <li>保留原始排版和样式</li>
+        </ul>
+      </div>
+    </footer>
+  </div>
+  
+  <script src="popup.js"></script>
+</body>
+</html> 

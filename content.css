@@ -1,0 +1,192 @@
+/**
+ * 内容脚本样式
+ * 
+ * 这些样式会被注入到目标网页中，用于：
+ * 1. 标识正在处理的内容
+ * 2. 提供视觉反馈
+ * 3. 辅助内容提取过程
+ */
+
+/* PDF生成过程中的页面覆盖层 */
+.pdf-generator-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.3);
+  z-index: 999999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+/* 生成进度提示框 */
+.pdf-generator-progress {
+  background: white;
+  padding: 30px;
+  border-radius: 12px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
+  text-align: center;
+  min-width: 300px;
+  max-width: 80%;
+}
+
+.pdf-generator-progress h3 {
+  margin: 0 0 15px 0;
+  color: #333;
+  font-size: 18px;
+}
+
+.pdf-generator-progress p {
+  margin: 5px 0;
+  color: #666;
+  font-size: 14px;
+}
+
+/* 进度条动画 */
+.pdf-progress-bar {
+  width: 100%;
+  height: 6px;
+  background: #f0f0f0;
+  border-radius: 3px;
+  overflow: hidden;
+  margin: 15px 0;
+}
+
+.pdf-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #4facfe 0%, #00f2fe 100%);
+  border-radius: 3px;
+  transition: width 0.3s ease;
+  width: 0%;
+}
+
+/* 脉冲动画效果 */
+@keyframes pdf-pulse {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.05); }
+  100% { transform: scale(1); }
+}
+
+.pdf-generator-progress {
+  animation: pdf-pulse 2s infinite ease-in-out;
+}
+
+/* 内容高亮样式 - 标识正在处理的元素 */
+.pdf-processing-highlight {
+  outline: 2px solid #4facfe !important;
+  outline-offset: 2px;
+  background: rgba(79, 172, 254, 0.05) !important;
+  transition: all 0.3s ease;
+}
+
+/* 标题处理标识 */
+.pdf-heading-processed {
+  position: relative;
+}
+
+.pdf-heading-processed::before {
+  content: '📖';
+  position: absolute;
+  left: -25px;
+  top: 0;
+  font-size: 16px;
+  opacity: 0.7;
+}
+
+/* 图片处理标识 */
+.pdf-image-processing {
+  border: 2px dashed #4facfe !important;
+  opacity: 0.8;
+  filter: brightness(0.9);
+}
+
+/* 代码块处理标识 */
+.pdf-code-processing {
+  background: rgba(245, 245, 245, 0.9) !important;
+  border-left: 4px solid #4facfe !important;
+}
+
+/* 完成提示 */
+.pdf-generation-complete {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  background: #4caf50;
+  color: white;
+  padding: 12px 20px;
+  border-radius: 6px;
+  z-index: 999999;
+  font-size: 14px;
+  box-shadow: 0 4px 12px rgba(76, 175, 80, 0.3);
+  animation: pdf-slide-in 0.3s ease-out;
+}
+
+@keyframes pdf-slide-in {
+  from {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+/* 错误提示 */
+.pdf-generation-error {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  background: #f44336;
+  color: white;
+  padding: 12px 20px;
+  border-radius: 6px;
+  z-index: 999999;
+  font-size: 14px;
+  box-shadow: 0 4px 12px rgba(244, 67, 54, 0.3);
+  animation: pdf-slide-in 0.3s ease-out;
+}
+
+/* 内容区域标识 */
+.pdf-main-content-detected {
+  outline: 1px dashed #4facfe;
+  outline-offset: 5px;
+}
+
+/* 跳过的内容标识 */
+.pdf-content-skipped {
+  opacity: 0.5;
+  filter: grayscale(50%);
+}
+
+/* 响应式调整 */
+@media (max-width: 768px) {
+  .pdf-generator-progress {
+    margin: 20px;
+    padding: 20px;
+  }
+  
+  .pdf-generation-complete,
+  .pdf-generation-error {
+    right: 10px;
+    left: 10px;
+    text-align: center;
+  }
+}
+
+/* 隐藏某些不需要的元素 */
+.pdf-hide-element {
+  display: none !important;
+}
+
+/* 页面预览模式样式 */
+.pdf-preview-mode * {
+  pointer-events: none;
+}
+
+.pdf-preview-mode {
+  filter: sepia(10%) brightness(0.95);
+} 
