@@ -22,6 +22,7 @@ class PDFGeneratorPopup {
       includeLinks: document.getElementById('includeLinks'),
       generateBtn: document.getElementById('generateBtn'),
       previewBtn: document.getElementById('previewBtn'),
+      generateMarkdownBtn: document.getElementById('generateMarkdownBtn'),
       progressSection: document.getElementById('progressSection'),
       progressFill: document.getElementById('progressFill'),
       progressText: document.getElementById('progressText')
@@ -83,6 +84,7 @@ class PDFGeneratorPopup {
     // 事件绑定 - 类似C++中的信号-槽机制
     this.elements.generateBtn.addEventListener('click', () => this.handleGenerate());
     this.elements.previewBtn.addEventListener('click', () => this.handlePreview());
+    this.elements.generateMarkdownBtn.addEventListener('click', () => this.handleGenerateMarkdown());
     
     // 输入变化时保存设置
     [this.elements.bookTitle, this.elements.authorName].forEach(input => {
@@ -122,6 +124,38 @@ class PDFGeneratorPopup {
     } catch (error) {
       console.error('生成PDF失败:', error);
       this.showError('生成失败: ' + error.message);
+    } finally {
+      this.isGenerating = false;
+    }
+  }
+  
+  async handleGenerateMarkdown() {
+    if (this.isGenerating) return;
+    
+    try {
+      this.isGenerating = true;
+      this.showProgress('开始导出Markdown...');
+      
+      const options = this.getGenerationOptions();
+      
+      const response = await chrome.tabs.sendMessage(this.currentTab.id, {
+        action: 'generateMarkdown',
+        options: options
+      });
+      
+      if (response && response.success) {
+        this.showProgress('Markdown导出完成！');
+        setTimeout(() => {
+          this.hideProgress();
+          window.close();
+        }, 2000);
+      } else {
+        throw new Error(response?.error || 'Markdown导出失败');
+      }
+      
+    } catch (error) {
+      console.error('导出Markdown失败:', error);
+      this.showError('导出失败: ' + error.message);
     } finally {
       this.isGenerating = false;
     }
@@ -168,12 +202,14 @@ class PDFGeneratorPopup {
     this.elements.progressFill.style.width = `${progress}%`;
     this.elements.generateBtn.disabled = true;
     this.elements.previewBtn.disabled = true;
+    this.elements.generateMarkdownBtn.disabled = true;
   }
   
   hideProgress() {
     this.elements.progressSection.style.display = 'none';
     this.elements.generateBtn.disabled = false;
     this.elements.previewBtn.disabled = false;
+    this.elements.generateMarkdownBtn.disabled = false;
   }
   
   showError(message) {

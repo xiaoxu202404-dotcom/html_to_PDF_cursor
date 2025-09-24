@@ -41,6 +41,11 @@ class EnhancedPDFGenerator {
           sendResponse({ success: true });
           break;
           
+        case 'generateMarkdown':
+          await this.generateCompleteMarkdown(request.options);
+          sendResponse({ success: true });
+          break;
+
         case 'previewContent':
           const preview = this.generatePreview();
           sendResponse({ success: true, preview });
@@ -201,7 +206,184 @@ class EnhancedPDFGenerator {
       throw error;
     }
   }
-  
+
+  /**
+   * 生成完整的Markdown文档
+   */
+  async generateCompleteMarkdown(options) {
+    try {
+      console.log('🚀 开始生成完整Markdown文档...');
+      this.showProgressPanel();
+      
+      const allPages = this.discoverAllPages();
+      this.totalPages = allPages.length;
+      
+      if (allPages.length === 0) {
+        throw new Error('未发现任何相关页面，请检查页面结构');
+      }
+      
+      this.updateProgress(`发现 ${allPages.length} 个页面，开始抓取内容...`);
+      
+      const pageContents = await this.batchFetchPages(allPages);
+      
+      this.updateProgress('正在转换内容为Markdown...');
+      
+      let completeMarkdown = `# ${options.title}\n\n`;
+      
+      // 生成目录
+      if (pageContents.length > 1) {
+        completeMarkdown += `## 目录\n\n`;
+        pageContents.forEach((page) => {
+          const indent = '  '.repeat(Math.max(0, (page.level || 1) - 1));
+          const title = page.title || '未命名页面';
+          const anchor = title.trim().toLowerCase().replace(/[\s\W]+/g, '-').replace(/^-+|-+$/g, '');
+          completeMarkdown += `${indent}* [${title}](#${anchor})\n`;
+        });
+        completeMarkdown += `\n`;
+      }
+
+      for (let i = 0; i < pageContents.length; i++) {
+        const page = pageContents[i];
+        this.currentProgress = i + 1;
+        this.updateProgress(`正在转换: ${page.title} (${this.currentProgress}/${this.totalPages})`);
+
+        if (page.content) {
+            const level = 1; // 在Markdown中，每个文档都作为一级标题
+            const heading = '#'.repeat(level);
+            completeMarkdown += `${heading} ${page.title || '未命名页面'}\n\n`;
+            
+            const markdownContent = this.htmlToMarkdown(page.content.html);
+            completeMarkdown += markdownContent + '\n\n---\n\n';
+        }
+      }
+      
+      this.downloadMarkdown(completeMarkdown, `${options.title}.md`);
+      this.hideProgressPanel();
+      console.log('✅ Markdown文档生成完成');
+
+    } catch (error) {
+      console.error('Markdown生成失败:', error);
+      this.showError(error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * 下载Markdown文件
+   */
+  downloadMarkdown(content, filename) {
+    const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  /**
+   * HTML转Markdown
+   */
+  htmlToMarkdown(htmlString) {
+      if (!htmlString) return '';
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(htmlString, 'text/html');
+      return this._convertNodeToMarkdown(doc.body);
+  }
+
+  _convertNodeToMarkdown(node, listState = {}) {
+      if (node.nodeType === Node.TEXT_NODE) {
+          if (node.parentNode.closest('pre, code')) {
+              return node.textContent;
+          }
+          return node.textContent.replace(/(\r\n|\n|\r)/gm, " ").replace(/\s+/g, ' ');
+      }
+
+      if (node.nodeType !== Node.ELEMENT_NODE || node.style.display === 'none' || node.style.visibility === 'hidden') {
+          return '';
+      }
+
+      let childrenContent = '';
+      const childNodes = Array.from(node.childNodes);
+
+      for (let i = 0; i < childNodes.length; i++) {
+          const child = childNodes[i];
+          const childListState = { ...listState };
+          if (node.tagName === 'OL') {
+              childListState.type = 'ol';
+              if (!childListState.start) childListState.start = 1;
+              if (child.tagName === 'LI') {
+                  childListState.index = childListState.start++;
+              }
+          } else if (node.tagName === 'UL') {
+              childListState.type = 'ul';
+          } else if (listState.type) {
+              childListState.level = (listState.level || 0) + 1;
+          }
+          childrenContent += this._convertNodeToMarkdown(child, childListState);
+      }
+      
+      const blockSeparator = '\n\n';
+      const trimContent = childrenContent.trim();
+
+      switch (node.tagName) {
+          case 'H1': return `# ${trimContent}${blockSeparator}`;
+          case 'H2': return `## ${trimContent}${blockSeparator}`;
+          case 'H3': return `### ${trimContent}${blockSeparator}`;
+          case 'H4': return `#### ${trimContent}${blockSeparator}`;
+          case 'H5': return `##### ${trimContent}${blockSeparator}`;
+          case 'H6': return `###### ${trimContent}${blockSeparator}`;
+          case 'P': return `${trimContent}${blockSeparator}`;
+          case 'BLOCKQUOTE': return trimContent.split('\n').map(line => `> ${line}`).join('\n') + blockSeparator;
+          case 'PRE':
+              const codeContent = node.textContent || '';
+              return `\`\`\`\n${codeContent.trim()}\n\`\`\`${blockSeparator}`;
+          case 'CODE':
+              return node.closest('pre') ? trimContent : `\`${trimContent}\``;
+          case 'A':
+              const href = node.getAttribute('href') || '';
+              return href ? `[${childrenContent}](${href})` : childrenContent;
+          case 'IMG':
+              return `![${node.getAttribute('alt') || ''}](${node.getAttribute('src') || ''})\n`;
+          case 'STRONG': case 'B': return `**${childrenContent}**`;
+          case 'EM': case 'I': return `*${childrenContent}*`;
+          case 'DEL': case 'S': return `~~${childrenContent}~~`;
+          case 'HR': return `---${blockSeparator}`;
+          case 'BR': return '  \n';
+          case 'UL': return `${childrenContent.trim()}${blockSeparator}`;
+          case 'OL': return `${childrenContent.trim()}${blockSeparator}`;
+          case 'LI':
+              const indent = '  '.repeat(listState.level || 0);
+              if (listState.type === 'ol') {
+                  return `${indent}${listState.index}. ${trimContent}\n`;
+              }
+              return `${indent}* ${trimContent}\n`;
+          case 'TABLE':
+              let tableMd = '';
+              const headerRow = node.querySelector('thead tr, tr');
+              if (headerRow) {
+                  const headers = Array.from(headerRow.querySelectorAll('th, td')).map(cell => this._convertNodeToMarkdown(cell).trim());
+                  tableMd += `| ${headers.join(' | ')} |\n`;
+                  tableMd += `| ${headers.map(() => '---').join(' | ')} |\n`;
+              }
+              const bodyRows = node.querySelectorAll('tbody tr');
+              bodyRows.forEach(row => {
+                  const cells = Array.from(row.querySelectorAll('td')).map(cell => this._convertNodeToMarkdown(cell).trim().replace(/\|/g, '\\|'));
+                  tableMd += `| ${cells.join(' | ')} |\n`;
+              });
+              return tableMd + '\n';
+          case 'SCRIPT': case 'STYLE': return '';
+          case 'BODY': case 'DIV': case 'SPAN': case 'SECTION': case 'ARTICLE': case 'MAIN': case 'HEADER': case 'FOOTER': case 'NAV':
+              return childrenContent;
+          case 'THEAD': case 'TBODY': case 'TR': case 'TH': case 'TD':
+              return `${childrenContent} `;
+          default:
+              return childrenContent;
+      }
+  }
+
   /**
    * 批量抓取页面内容
    */
