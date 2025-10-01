@@ -18,6 +18,11 @@ class EnhancedPDFGenerator {
     this.currentProgress = 0;
     this.totalPages = 0;
     
+    // 图片处理相关
+    this.imageMap = new Map(); // 原始URL -> {localPath, blob, fileName}
+    this.imageCounter = 0;
+    this.failedImages = []; // 失败的图片列表 {url, error, pageTitle, altText}
+    
     this.init();
   }
   
@@ -208,12 +213,17 @@ class EnhancedPDFGenerator {
   }
 
   /**
-   * 生成完整的Markdown文档
+   * 生成完整的Markdown文档（带图片打包）
    */
   async generateCompleteMarkdown(options) {
     try {
       console.log('🚀 开始生成完整Markdown文档...');
       this.showProgressPanel();
+      
+      // 重置图片映射和失败列表
+      this.imageMap.clear();
+      this.imageCounter = 0;
+      this.failedImages = [];
       
       const allPages = this.discoverAllPages();
       this.totalPages = allPages.length;
@@ -226,9 +236,53 @@ class EnhancedPDFGenerator {
       
       const pageContents = await this.batchFetchPages(allPages);
       
+      // ========== 新增：收集所有图片 ==========
+      this.updateProgress('正在分析页面中的图片...');
+      const allImageInfos = [];
+      
+      for (const page of pageContents) {
+        if (page.content && page.content.html) {
+          const images = await this.collectImagesFromHTML(page.content.html, page.title);
+          allImageInfos.push(...images);
+        }
+      }
+      
+      // 去重（基于 URL）
+      const imageUrlMap = new Map();
+      for (const imgInfo of allImageInfos) {
+        if (!imageUrlMap.has(imgInfo.url)) {
+          imageUrlMap.set(imgInfo.url, imgInfo);
+        }
+      }
+      const uniqueImages = Array.from(imageUrlMap.values());
+      console.log(`📊 共发现 ${uniqueImages.length} 张唯一图片`);
+      
+      // 下载所有图片
+      let downloadedImages = [];
+      if (uniqueImages.length > 0) {
+        this.updateProgress(`发现 ${uniqueImages.length} 张图片，开始下载...`);
+        const imageUrls = uniqueImages.map(img => img.url);
+        downloadedImages = await this.batchDownloadImages(imageUrls);
+        
+        // 更新失败图片的上下文信息
+        for (const failedImg of this.failedImages) {
+          const imgInfo = uniqueImages.find(img => img.url === failedImg.url);
+          if (imgInfo) {
+            failedImg.altText = imgInfo.altText;
+            failedImg.context = imgInfo.context;
+            failedImg.pageTitle = imgInfo.pageTitle;
+          }
+        }
+      }
+      
+      // ========== 转换内容为 Markdown ==========
       this.updateProgress('正在转换内容为Markdown...');
       
       let completeMarkdown = `# ${options.title}\n\n`;
+      
+      if (downloadedImages.length > 0) {
+        completeMarkdown += `> 📝 本文档包含 ${downloadedImages.length} 张本地图片\n\n`;
+      }
       
       // 生成目录
       if (pageContents.length > 1) {
@@ -257,7 +311,21 @@ class EnhancedPDFGenerator {
         }
       }
       
-      this.downloadMarkdown(completeMarkdown, `${options.title}.md`);
+      // ========== 新增：替换图片路径 ==========
+      if (downloadedImages.length > 0) {
+        this.updateProgress('正在更新图片路径...');
+        completeMarkdown = this.replaceImagePaths(completeMarkdown);
+      }
+      
+      // ========== 新增：打包为 ZIP 文件 ==========
+      if (downloadedImages.length > 0) {
+        this.updateProgress('正在打包文件...');
+        await this.downloadMarkdownWithImages(completeMarkdown, options.title, downloadedImages);
+      } else {
+        // 如果没有图片，直接下载 Markdown 文件
+        this.downloadMarkdown(completeMarkdown, `${options.title}.md`);
+      }
+      
       this.hideProgressPanel();
       console.log('✅ Markdown文档生成完成');
 
@@ -281,6 +349,90 @@ class EnhancedPDFGenerator {
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
+  }
+
+  /**
+   * 下载 Markdown 文件和图片（打包为 ZIP）
+   * 使用 JSZip 将 Markdown 文件和 images 文件夹打包成一个 ZIP 文件
+   */
+  async downloadMarkdownWithImages(markdownContent, title, downloadedImages) {
+    try {
+      console.log('📦 开始打包文件...');
+      console.log(`📄 Markdown 内容长度: ${markdownContent.length} 字符`);
+      console.log(`🖼️  图片数量: ${downloadedImages.length}`);
+      
+      // 清理文件名，移除不安全字符
+      const safeTitle = this.sanitizeFileName(title);
+      console.log(`📝 文件名: ${safeTitle}.md`);
+      
+      // 创建 ZIP 对象
+      const zip = new JSZip();
+      
+      // 添加 Markdown 文件到 ZIP 根目录
+      zip.file(`${safeTitle}.md`, markdownContent);
+      console.log(`✅ 已添加 Markdown 文件: ${safeTitle}.md`);
+      
+      // 创建 images 文件夹并添加所有图片
+      const imagesFolder = zip.folder('images');
+      let imageCount = 0;
+      for (const imageInfo of downloadedImages) {
+        if (imageInfo && imageInfo.blob && imageInfo.fileName) {
+          imagesFolder.file(imageInfo.fileName, imageInfo.blob);
+          imageCount++;
+          console.log(`  ✅ 添加图片 ${imageCount}/${downloadedImages.length}: ${imageInfo.fileName}`);
+        }
+      }
+      
+      // 如果有失败的图片，生成失败报告
+      const failureReport = this.generateFailureReport();
+      if (failureReport) {
+        zip.file(`⚠️ 图片失败报告.md`, failureReport);
+        console.log(`⚠️  已添加失败报告: ${this.failedImages.length} 张图片需要手动处理`);
+      }
+      
+      // 生成 ZIP 文件
+      console.log('🔄 正在压缩文件...');
+      const zipBlob = await zip.generateAsync({
+        type: 'blob',
+        compression: 'DEFLATE',
+        compressionOptions: {
+          level: 6 // 压缩级别 1-9，6 是平衡选项
+        }
+      });
+      
+      console.log(`📦 ZIP 大小: ${(zipBlob.size / 1024 / 1024).toFixed(2)} MB`);
+      
+      // 下载 ZIP 文件
+      const url = URL.createObjectURL(zipBlob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${safeTitle}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      
+      console.log(`✅ ZIP 文件已生成: ${safeTitle}.zip (包含 1 个 Markdown 文件 + ${imageCount} 张图片)`);
+    } catch (error) {
+      console.error('❌ 打包文件失败:', error);
+      throw new Error(`打包失败: ${error.message}`);
+    }
+  }
+
+  /**
+   * 清理文件名，移除不安全字符
+   * Windows 文件名不能包含: \ / : * ? " < > |
+   */
+  sanitizeFileName(filename) {
+    // 移除不安全字符
+    let safe = filename.replace(/[\\/:*?"<>|]/g, '-');
+    // 移除多余的空格和破折号
+    safe = safe.replace(/\s+/g, ' ').replace(/-+/g, '-').trim();
+    // 限制长度（Windows 路径限制）
+    if (safe.length > 100) {
+      safe = safe.substring(0, 100);
+    }
+    return safe || 'document';
   }
 
   /**
@@ -2124,6 +2276,335 @@ class EnhancedPDFGenerator {
     }
     
     return styles;
+  }
+
+  /**
+   * 下载图片为 Blob 对象
+   * 处理网络图片的二进制数据获取
+   */
+  async downloadImageAsBlob(imageUrl) {
+    try {
+      console.log(`📥 正在下载图片: ${imageUrl}`);
+      
+      // 使用 fetch API 获取图片数据
+      const response = await fetch(imageUrl, {
+        method: 'GET',
+        credentials: 'same-origin', // 处理需要认证的图片
+        cache: 'force-cache' // 优先使用缓存
+      });
+      
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+      
+      // 获取 Content-Type 来确定文件扩展名
+      const contentType = response.headers.get('Content-Type') || '';
+      const blob = await response.blob();
+      
+      // 根据 MIME 类型确定扩展名
+      let extension = 'png'; // 默认
+      if (contentType.includes('jpeg') || contentType.includes('jpg')) {
+        extension = 'jpg';
+      } else if (contentType.includes('png')) {
+        extension = 'png';
+      } else if (contentType.includes('gif')) {
+        extension = 'gif';
+      } else if (contentType.includes('webp')) {
+        extension = 'webp';
+      } else if (contentType.includes('svg')) {
+        extension = 'svg';
+      }
+      
+      // 如果 Content-Type 不可靠，从 URL 推断
+      if (!contentType && imageUrl) {
+        const urlPath = new URL(imageUrl, window.location.href).pathname;
+        const match = urlPath.match(/\.(jpg|jpeg|png|gif|webp|svg)$/i);
+        if (match) {
+          extension = match[1].toLowerCase();
+        }
+      }
+      
+      return { blob, extension };
+    } catch (error) {
+      console.error(`❌ 图片下载失败: ${imageUrl}`, error);
+      return null;
+    }
+  }
+
+  /**
+   * 生成图片文件名
+   * 使用简单的计数器和哈希来避免文件名冲突
+   */
+  async generateImageFileName(imageUrl, extension) {
+    // 使用计数器 + URL 哈希的简化版本
+    this.imageCounter++;
+    
+    // 简单的字符串哈希函数（避免使用 crypto.subtle 的异步复杂性）
+    let hash = 0;
+    for (let i = 0; i < imageUrl.length; i++) {
+      const char = imageUrl.charCodeAt(i);
+      hash = ((hash << 5) - hash) + char;
+      hash = hash & hash; // 转换为 32位整数
+    }
+    const hashHex = Math.abs(hash).toString(16).padStart(8, '0');
+    
+    return `img_${this.imageCounter}_${hashHex}.${extension}`;
+  }
+
+  /**
+   * 从 HTML 内容中收集所有图片
+   * 遍历 DOM 结构，提取所有 img 标签的 src 属性和上下文信息
+   */
+  async collectImagesFromHTML(htmlContent, pageTitle = '未知页面') {
+    const images = [];
+    
+    if (!htmlContent) return images;
+    
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(htmlContent, 'text/html');
+    const imgElements = doc.querySelectorAll('img');
+    
+    console.log(`🖼️  发现 ${imgElements.length} 张图片`);
+    
+    for (const img of imgElements) {
+      const originalSrc = img.getAttribute('src');
+      if (!originalSrc) continue;
+      
+      try {
+        // 转换为绝对 URL（处理相对路径）
+        const absoluteUrl = new URL(originalSrc, window.location.href).href;
+        
+        // 跳过 data: URL
+        if (absoluteUrl.startsWith('data:')) {
+          continue;
+        }
+        
+        // 收集上下文信息
+        const altText = img.getAttribute('alt') || '';
+        const title = img.getAttribute('title') || '';
+        
+        // 获取前后文本（用于定位）
+        let context = '';
+        const parentElement = img.parentElement;
+        if (parentElement) {
+          // 获取图片所在段落的文本（前50个字符）
+          const textContent = parentElement.textContent || '';
+          context = textContent.substring(0, 50).trim();
+        }
+        
+        images.push({
+          url: absoluteUrl,
+          altText: altText,
+          title: title,
+          context: context,
+          pageTitle: pageTitle
+        });
+      } catch (error) {
+        console.warn(`⚠️  无效的图片 URL: ${originalSrc}`, error);
+      }
+    }
+    
+    return images;
+  }
+
+  /**
+   * 批量下载图片
+   * 使用分批并发控制来优化下载速度，避免同时发起过多请求
+   */
+  async batchDownloadImages(imageUrls, pageTitle = '未知页面') {
+    const BATCH_SIZE = 5; // 每批并发下载 5 张图片
+    const downloadedImages = [];
+    
+    for (let i = 0; i < imageUrls.length; i += BATCH_SIZE) {
+      const batch = imageUrls.slice(i, i + BATCH_SIZE);
+      this.updateProgress(`正在下载图片 ${i + 1}-${Math.min(i + BATCH_SIZE, imageUrls.length)}/${imageUrls.length}...`);
+      
+      const results = await Promise.allSettled(
+        batch.map(async (url) => {
+          if (this.imageMap.has(url)) {
+            return { success: true, data: this.imageMap.get(url) };
+          }
+          
+          const result = await this.downloadImageAsBlob(url);
+          if (result && result.blob) {
+            const fileName = await this.generateImageFileName(url, result.extension);
+            const relativePath = `./images/${fileName}`;
+            
+            const imageInfo = {
+              localPath: relativePath,
+              blob: result.blob,
+              fileName: fileName,
+              originalUrl: url
+            };
+            
+            this.imageMap.set(url, imageInfo);
+            return { success: true, data: imageInfo };
+          }
+          return { success: false, url: url, error: '下载失败' };
+        })
+      );
+      
+      // 收集成功下载的图片和失败信息
+      results.forEach((result, index) => {
+        const url = batch[index];
+        
+        if (result.status === 'fulfilled' && result.value) {
+          if (result.value.success) {
+            downloadedImages.push(result.value.data);
+          } else {
+            // 记录失败的图片
+            this.failedImages.push({
+              url: url,
+              error: result.value.error || '未知错误',
+              pageTitle: pageTitle,
+              altText: ''
+            });
+            console.warn(`⚠️  图片下载失败: ${url}`);
+          }
+        } else if (result.status === 'rejected') {
+          // Promise 被拒绝
+          this.failedImages.push({
+            url: url,
+            error: result.reason?.message || '下载异常',
+            pageTitle: pageTitle,
+            altText: ''
+          });
+          console.error(`❌ 图片下载异常: ${url}`, result.reason);
+        }
+      });
+      
+      // 短暂延迟，避免请求过快
+      if (i + BATCH_SIZE < imageUrls.length) {
+        await new Promise(resolve => setTimeout(resolve, 200));
+      }
+    }
+    
+    const successCount = downloadedImages.length;
+    const failCount = imageUrls.length - successCount;
+    
+    if (failCount > 0) {
+      console.log(`⚠️  下载完成: 成功 ${successCount} 张, 失败 ${failCount} 张`);
+    } else {
+      console.log(`✅ 成功下载 ${successCount}/${imageUrls.length} 张图片`);
+    }
+    
+    return downloadedImages;
+  }
+
+  /**
+   * 替换 Markdown 中的图片路径
+   * 将原始 URL 替换为本地相对路径，对失败的图片添加警告标记
+   */
+  replaceImagePaths(markdownContent) {
+    let updatedContent = markdownContent;
+    
+    // 遍历所有已下载的图片，进行路径替换
+    for (const [originalUrl, imageInfo] of this.imageMap) {
+      // 转义特殊字符，用于正则表达式
+      const escapedUrl = originalUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      
+      // 匹配 Markdown 图片语法：![alt](url)
+      const regex = new RegExp(`!\\[([^\\]]*)\\]\\(${escapedUrl}\\)`, 'g');
+      updatedContent = updatedContent.replace(regex, `![$1](${imageInfo.localPath})`);
+    }
+    
+    // 对失败的图片添加醒目标记
+    for (const failedImg of this.failedImages) {
+      const escapedUrl = failedImg.url.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const regex = new RegExp(`!\\[([^\\]]*)\\]\\(${escapedUrl}\\)`, 'g');
+      
+      // 添加警告标记和原始 URL
+      const replacement = `\n\n> ⚠️ **图片加载失败** - 请手动处理\n> \n> 原因: ${failedImg.error}\n> \n> 原始链接: [点击查看](<${failedImg.url}>)\n\n![$1](${failedImg.url} "❌ 下载失败")`;
+      
+      updatedContent = updatedContent.replace(regex, replacement);
+    }
+    
+    return updatedContent;
+  }
+
+  /**
+   * 生成失败图片报告
+   * 创建一个详细的失败清单，方便用户手动处理
+   */
+  generateFailureReport() {
+    if (this.failedImages.length === 0) {
+      return null;
+    }
+    
+    let report = `# 图片下载失败报告\n\n`;
+    report += `生成时间: ${new Date().toLocaleString('zh-CN')}\n\n`;
+    report += `共有 **${this.failedImages.length}** 张图片下载失败，需要手动处理。\n\n`;
+    report += `---\n\n`;
+    
+    // 按页面分组
+    const groupedByPage = new Map();
+    for (const img of this.failedImages) {
+      const pageTitle = img.pageTitle || '未知页面';
+      if (!groupedByPage.has(pageTitle)) {
+        groupedByPage.set(pageTitle, []);
+      }
+      groupedByPage.get(pageTitle).push(img);
+    }
+    
+    let index = 1;
+    for (const [pageTitle, images] of groupedByPage) {
+      report += `## 📄 ${pageTitle}\n\n`;
+      report += `该页面有 ${images.length} 张图片下载失败：\n\n`;
+      
+      for (const img of images) {
+        report += `### ${index}. 图片信息\n\n`;
+        
+        if (img.altText) {
+          report += `- **图片描述**: ${img.altText}\n`;
+        }
+        
+        if (img.context) {
+          report += `- **上下文**: ${img.context}...\n`;
+        }
+        
+        report += `- **失败原因**: \`${img.error}\`\n`;
+        report += `- **原始链接**: \n  \`\`\`\n  ${img.url}\n  \`\`\`\n`;
+        
+        // 分析错误类型并给出建议
+        report += `\n**处理建议**:\n`;
+        
+        if (img.error.includes('CORS') || img.error.includes('blocked')) {
+          report += `- ✅ 在浏览器中打开链接，右键保存图片\n`;
+          report += `- ✅ 使用截图工具截取网页上的图片\n`;
+          report += `- ✅ 使用浏览器的"检查元素"功能，在Network标签中找到图片并保存\n`;
+        } else if (img.error.includes('404') || img.error.includes('HTTP')) {
+          report += `- ⚠️ 图片链接已失效，无法访问\n`;
+          report += `- ✅ 检查网页上是否还能看到这张图片\n`;
+          report += `- ✅ 如果图片重要，尝试使用互联网档案馆（Wayback Machine）查找历史版本\n`;
+        } else {
+          report += `- ✅ 在浏览器中直接打开链接尝试访问\n`;
+          report += `- ✅ 如果能访问，手动右键保存图片\n`;
+        }
+        
+        report += `\n**替换步骤**:\n`;
+        report += `1. 下载或截取图片，保存到 \`images/\` 文件夹\n`;
+        report += `2. 将图片重命名为 \`manual_${index}.jpg\` (或对应格式)\n`;
+        report += `3. 在 Markdown 文件中搜索上述链接\n`;
+        report += `4. 替换为: \`![${img.altText || '图片'}](./images/manual_${index}.jpg)\`\n`;
+        
+        report += `\n---\n\n`;
+        index++;
+      }
+    }
+    
+    // 添加批量处理脚本（可选）
+    report += `## 📋 批量处理清单\n\n`;
+    report += `可以复制以下链接列表，使用下载工具批量下载：\n\n`;
+    report += `\`\`\`text\n`;
+    for (const img of this.failedImages) {
+      report += `${img.url}\n`;
+    }
+    report += `\`\`\`\n\n`;
+    
+    report += `---\n\n`;
+    report += `💡 **提示**: 在 Markdown 文件中搜索 "⚠️ **图片加载失败**" 可以快速定位所有失败的图片位置。\n`;
+    
+    return report;
   }
 }
 
